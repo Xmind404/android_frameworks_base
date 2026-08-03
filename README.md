@@ -27,7 +27,7 @@ The purpose of this project is to maintain, modify, and improve the existing sou
 
 This repository contains my own modifications and improvements, including:
 
-Revert: restore original IntentFilter.java and DomainVerificationService.java | Remove the Domain Verification Auto-Approve patch for applications, restoring stock behavior from LineageOS/android_frameworks_base:lineage-22.2.
+* Revert: restore original IntentFilter.java and DomainVerificationService.java | Remove the Domain Verification Auto-Approve patch for applications, restoring stock behavior from LineageOS/android_frameworks_base:lineage-22.2.
 
 All changes introduced in this repository are my own work unless explicitly stated otherwise.
 
