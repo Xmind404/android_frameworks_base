@@ -3212,16 +3212,15 @@ public final class PowerManagerService extends SystemService
                                         UserHandle.USER_CURRENT) == 1;
                                 if (screenBrightInt <= 0) {
                                     keyboardBrightScale = 0.0f;
+                                } else if (screenBrightInt < 25) {
+                                    keyboardBrightScale = 1.0f;
                                 } else if (screenBrightInt < 50) {
-                                    // Smooth scaling curve for keyboard backlight
-                                    // 10% floor for Athena, 70% floor for Luna (Luna has dimmer backlight)
-                                    float minKbScale = isLunaDevice() ? 0.7f : 0.1f;
-                                    keyboardBrightScale = 
-                                        minKbScale + ((1.0f - minKbScale) * (screenBrightInt / 255.0f));
-                                    keyboardBrightScale = 
-                                        Math.max(minKbScale, Math.min(1.0f, keyboardBrightScale));
+                                    keyboardBrightScale = isLunaDevice() ? 0.9f : 0.75f;
+                                } else if (screenBrightInt < 75) {
+                                    keyboardBrightScale = isLunaDevice() ? 0.8f : 0.5f;
+                                } else if (screenBrightInt < 100) {
+                                    keyboardBrightScale = isLunaDevice() ? 0.7f : 0.25f;
                                 } else {
-                                    // Bright (daylight): kbd off
                                     keyboardBrightScale = 0.0f;
                                 }
                             } catch (Exception e) {
@@ -3290,7 +3289,8 @@ public final class PowerManagerService extends SystemService
                                 } else if (isValidKeyboardBrightness(mKeyboardBrightness)) {
                                     keyboardBrightness = mKeyboardBrightness;
                                 }
-                                // Scale keyboard brightness with screen brightness (off in daylight)
+                                // Scale keyboard brightness in steps based on screen brightness.
+                                // Keyboard is off in bright conditions.
                                 // ONLY if toggle is enabled
                                 if (keyboardBrightness > BRIGHTNESS_OFF_FLOAT && adaptiveKeyboardBrightness) {
                                     keyboardBrightness *= keyboardBrightScale;
