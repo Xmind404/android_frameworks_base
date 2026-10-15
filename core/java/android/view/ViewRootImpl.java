@@ -7773,10 +7773,18 @@ public final class ViewRootImpl implements ViewParent,
                 return processPointerEvent(q);
             }
 
+            final boolean isTouchKeypad =
+                    event.isFromSource(InputDevice.SOURCE_TOUCHPAD)
+                            && event.getDeviceId() == View.getTouchKeypadDeviceId();
+
             // If the motion event is from an absolute position device, exit touch mode
             final int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_SCROLL) {
-                if (event.isFromSource(InputDevice.SOURCE_CLASS_POSITION)) {
+                // Touching Athena's capacitive keyboard must not move application
+                // focus to the first focusable view. Its motion is handled later by
+                // SyntheticTouchKeypadHandler or by an interested application/IME.
+                if (event.isFromSource(InputDevice.SOURCE_CLASS_POSITION)
+                        && !isTouchKeypad) {
                     ensureTouchMode(false);
                 }
             }
@@ -8309,6 +8317,14 @@ public final class ViewRootImpl implements ViewParent,
         return mView != null ? mView.findFocus() : null;
     }
 
+    private static final String TOUCH_KEYPAD_SCROLLING_DISABLED_PROPERTY =
+            "persist.vendor.touchkeypad.scrolling_disabled";
+
+    private static boolean isTouchKeypadScrollingEnabled() {
+        return !SystemProperties.getBoolean(
+                TOUCH_KEYPAD_SCROLLING_DISABLED_PROPERTY, false);
+    }
+
     /**
      * Performs synthesis of new input events from unhandled input events.
      */
@@ -8344,7 +8360,14 @@ public final class ViewRootImpl implements ViewParent,
                 } else if ((source & InputDevice.SOURCE_TOUCHPAD)
                         == InputDevice.SOURCE_TOUCHPAD
                         && event.getDeviceId() == View.getTouchKeypadDeviceId()) {
-                    mTouchKeypad.process(event);
+                    if (isTouchKeypadScrollingEnabled()) {
+                        mTouchKeypad.process(event);
+                    } else {
+                        // Consume the built-in keyboard touchpad event without generating
+                        // scrolling. InputDispatcher has already reported the touch to
+                        // PowerManagerService for keyboard/button backlight handling.
+                        mTouchKeypad.cancel(event);
+                    }
                     return FINISH_HANDLED;
                 } else if ((source & InputDevice.SOURCE_TOUCH_NAVIGATION)
                         == InputDevice.SOURCE_TOUCH_NAVIGATION) {
@@ -9008,203 +9031,132 @@ public final class ViewRootImpl implements ViewParent,
      * ACTION_SCROLL events, reproducing the retail firmware scrolling behavior.
      */
     final class SyntheticTouchKeypadHandler extends Handler {
-
-        private static final float SCROLL_FACTOR_H = 0.0095f;
-        private static final float SCROLL_FACTOR_V = 0.0060f;
+        private static final float SCROLL_FACTOR = 0.0117f;
+        // Scale factor: OverScroller works in integer pixels, so we scale up
+        // velocity by this amount to get sub-pixel precision from int deltas
         private static final float FLING_SCALE = 5.0f;
-        private static final float FLING_SCROLL_FACTOR = 0.0068f / FLING_SCALE;
-        private static final float FLING_FRICTION = 0.022f;
+        private static final float FLING_SCROLL_FACTOR = 0.0081f / FLING_SCALE;
+        private static final float FLING_FRICTION = 0.0198f;
         private static final float FLING_MIN_VELOCITY = 50.0f;
-        private static final float TOUCH_SLOP = 3.0f;
+        private static final float TOUCH_SLOP = 8.0f;
 
         private VelocityTracker mVelocityTracker;
-
         private float mStartX;
         private float mStartY;
         private float mLastX;
         private float mLastY;
-
         private float mMappedX;
         private float mMappedY;
-
         private boolean mAxisLocked;
         private boolean mHorizontalLock;
         private boolean mFlinging;
-
         private OverScroller mScroller;
-
         private int mLastScrollerX;
         private int mLastScrollerY;
-
         private float mResidualVelocityX;
         private float mResidualVelocityY;
-
         private Choreographer mChoreographer;
-
-        private final MotionEvent.PointerProperties[] mPointerProperties;
-        private final MotionEvent.PointerCoords[] mPointerCoords;
 
         SyntheticTouchKeypadHandler() {
             super(true);
-
             mScroller = new OverScroller(mContext);
             mScroller.setFriction(FLING_FRICTION);
-
             mChoreographer = Choreographer.getInstance();
-
-            mPointerProperties = new MotionEvent.PointerProperties[1];
-            mPointerProperties[0] = new MotionEvent.PointerProperties();
-            mPointerProperties[0].id = 0;
-            mPointerProperties[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
-
-            mPointerCoords = new MotionEvent.PointerCoords[1];
-            mPointerCoords[0] = new MotionEvent.PointerCoords();
         }
 
         public void process(MotionEvent event) {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    // Save residual fling velocity before cancelling
                     if (mFlinging) {
                         mScroller.computeScrollOffset();
-
                         float currVel = mScroller.getCurrVelocity() / FLING_SCALE;
-
                         mResidualVelocityX = currVel
-                                * Math.signum(
-                                        mScroller.getFinalX() - mScroller.getStartX());
-
+                                * Math.signum(mScroller.getFinalX() - mScroller.getStartX());
                         mResidualVelocityY = currVel
-                                * Math.signum(
-                                        mScroller.getFinalY() - mScroller.getStartY());
+                                * Math.signum(mScroller.getFinalY() - mScroller.getStartY());
                     } else {
-                        mResidualVelocityX = 0.0f;
-                        mResidualVelocityY = 0.0f;
+                        mResidualVelocityX = 0;
+                        mResidualVelocityY = 0;
                     }
-
                     cancelFling();
-
                     if (mVelocityTracker == null) {
                         mVelocityTracker = VelocityTracker.obtain();
                     } else {
                         mVelocityTracker.clear();
                     }
-
                     mVelocityTracker.addMovement(event);
-
                     mStartX = event.getX();
                     mStartY = event.getY();
-
                     mLastX = mStartX;
                     mLastY = mStartY;
-
+                    // Map raw touchpad X to screen X using sensor range ratio
                     Display display = mDisplay;
-
                     if (display != null) {
                         Point size = new Point();
                         display.getRealSize(size);
-
                         mMappedX = (mStartX / 1080.0f) * size.x;
                         mMappedY = size.y / 2.0f;
                     } else {
                         mMappedX = mStartX;
                         mMappedY = mStartY;
                     }
-
                     mAxisLocked = false;
-                    mHorizontalLock = false;
                     break;
-
                 case MotionEvent.ACTION_MOVE:
                     if (mVelocityTracker != null) {
                         mVelocityTracker.addMovement(event);
                     }
-
-                    float currentX = event.getX();
-                    float currentY = event.getY();
-
-                    float dx = currentX - mLastX;
-                    float dy = currentY - mLastY;
-
-                    mLastX = currentX;
-                    mLastY = currentY;
+                    float dx = event.getX() - mLastX;
+                    float dy = event.getY() - mLastY;
+                    mLastX = event.getX();
+                    mLastY = event.getY();
 
                     if (!mAxisLocked) {
-                        float totalDx = Math.abs(currentX - mStartX);
-                        float totalDy = Math.abs(currentY - mStartY);
-
+                        float totalDx = Math.abs(event.getX() - mStartX);
+                        float totalDy = Math.abs(event.getY() - mStartY);
                         if (totalDx > TOUCH_SLOP || totalDy > TOUCH_SLOP) {
                             mAxisLocked = true;
                             mHorizontalLock = totalDx > totalDy;
-                        } else {
-                            break;
                         }
                     }
 
-                    float hScroll = 0.0f;
-                    float vScroll = 0.0f;
-
-                    if (mHorizontalLock) {
-                        /*
-                        * Horizontal direction must be negated: raw dx is opposite
-                        * to the desired scroll direction (finger right -> content
-                        * should move as if scrolling right, not left).
-                        */
-                        hScroll = -dx * SCROLL_FACTOR_H;
-                    } else {
-                        /*
-                        * Vertical direction is already correct.
-                        *
-                        * Do NOT negate dy here.
-                        * This matches the natural BlackBerry touchpad direction:
-                        * moving the finger down produces positive vertical scroll,
-                        * moving the finger up produces negative vertical scroll.
-                        */
-                        vScroll = dy * SCROLL_FACTOR_V;
-                    }
-
-                    if (hScroll != 0.0f || vScroll != 0.0f) {
-                        sendScroll(event.getEventTime(), hScroll, vScroll);
+                    if (mAxisLocked) {
+                        float hScroll = 0;
+                        float vScroll = 0;
+                        if (mHorizontalLock) {
+                            hScroll = -dx * SCROLL_FACTOR;
+                        } else {
+                            vScroll = dy * SCROLL_FACTOR;
+                        }
+                        if (hScroll != 0 || vScroll != 0) {
+                            sendScroll(event.getEventTime(), hScroll, vScroll);
+                        }
                     }
                     break;
-
                 case MotionEvent.ACTION_UP:
                     if (mVelocityTracker != null) {
                         mVelocityTracker.addMovement(event);
                         mVelocityTracker.computeCurrentVelocity(1000);
-
                         float vx = mVelocityTracker.getXVelocity();
                         float vy = mVelocityTracker.getYVelocity();
-
                         mVelocityTracker.recycle();
                         mVelocityTracker = null;
-
                         if (mAxisLocked) {
-                            /*
-                            * Keep the fling on the same axis as the gesture.
-                            */
-                            if (Math.abs(vx) > Math.abs(vy)) {
-                                mHorizontalLock = true;
-                                vy = 0.0f;
+                            if (mHorizontalLock) {
+                                vy = 0;
                             } else {
-                                mHorizontalLock = false;
-                                vx = 0.0f;
+                                vx = 0;
                             }
-
-                            /*
-                            * Preserve momentum from a previous fling when the user
-                            * immediately starts another gesture in the same direction.
-                            */
-                            if (vx * mResidualVelocityX > 0.0f) {
+                            // Add residual velocity from previous fling if same direction
+                            if (vx * mResidualVelocityX > 0) {
                                 vx += mResidualVelocityX * 0.5f;
                             }
-
-                            if (vy * mResidualVelocityY > 0.0f) {
+                            if (vy * mResidualVelocityY > 0) {
                                 vy += mResidualVelocityY * 0.5f;
                             }
-
-                            mResidualVelocityX = 0.0f;
-                            mResidualVelocityY = 0.0f;
-
+                            mResidualVelocityX = 0;
+                            mResidualVelocityY = 0;
                             if (Math.abs(vx) > FLING_MIN_VELOCITY
                                     || Math.abs(vy) > FLING_MIN_VELOCITY) {
                                 startFling(vx, vy);
@@ -9212,7 +9164,6 @@ public final class ViewRootImpl implements ViewParent,
                         }
                     }
                     break;
-
                 case MotionEvent.ACTION_CANCEL:
                     cancel(event);
                     break;
@@ -9221,62 +9172,38 @@ public final class ViewRootImpl implements ViewParent,
 
         public void cancel(MotionEvent event) {
             cancelFling();
-
             if (mVelocityTracker != null) {
                 mVelocityTracker.recycle();
                 mVelocityTracker = null;
             }
-
-            mAxisLocked = false;
-            mHorizontalLock = false;
-            mResidualVelocityX = 0.0f;
-            mResidualVelocityY = 0.0f;
         }
 
         private void sendScroll(long time, float hScroll, float vScroll) {
-            MotionEvent.PointerCoords coords = mPointerCoords[0];
-
-            coords.x = mMappedX;
-            coords.y = mMappedY;
-
-            coords.setAxisValue(MotionEvent.AXIS_HSCROLL, hScroll);
-            coords.setAxisValue(MotionEvent.AXIS_VSCROLL, vScroll);
-
+            MotionEvent.PointerProperties[] pp = new MotionEvent.PointerProperties[1];
+            pp[0] = new MotionEvent.PointerProperties();
+            pp[0].id = 0;
+            pp[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
+            MotionEvent.PointerCoords[] pc = new MotionEvent.PointerCoords[1];
+            pc[0] = new MotionEvent.PointerCoords();
+            pc[0].x = mMappedX;
+            pc[0].y = mMappedY;
+            pc[0].setAxisValue(MotionEvent.AXIS_HSCROLL, hScroll);
+            pc[0].setAxisValue(MotionEvent.AXIS_VSCROLL, vScroll);
             MotionEvent scrollEvent = MotionEvent.obtain(
-                    time,
-                    time,
-                    MotionEvent.ACTION_SCROLL,
-                    1,
-                    mPointerProperties,
-                    mPointerCoords,
-                    0,
-                    0,
-                    1.0f,
-                    1.0f,
-                    0,
-                    0,
-                    InputDevice.SOURCE_MOUSE,
-                    0);
-
+                    time, time, MotionEvent.ACTION_SCROLL,
+                    1, pp, pc, 0, 0, 1.0f, 1.0f,
+                    0, 0, InputDevice.SOURCE_MOUSE, 0);
             enqueueInputEvent(scrollEvent);
         }
 
         private void startFling(float vx, float vy) {
             mFlinging = true;
-
             mLastScrollerX = 0;
             mLastScrollerY = 0;
-
-            mScroller.fling(
-                    0,
-                    0,
-                    (int) (vx * FLING_SCALE),
-                    (int) (vy * FLING_SCALE),
-                    Integer.MIN_VALUE,
-                    Integer.MAX_VALUE,
-                    Integer.MIN_VALUE,
-                    Integer.MAX_VALUE);
-
+            // Scale velocity up so OverScroller's int positions give sub-pixel precision
+            mScroller.fling(0, 0, (int) (vx * FLING_SCALE), (int) (vy * FLING_SCALE),
+                    Integer.MIN_VALUE, Integer.MAX_VALUE,
+                    Integer.MIN_VALUE, Integer.MAX_VALUE);
             mChoreographer.postFrameCallback(mFlingFrameCallback);
         }
 
@@ -9290,10 +9217,14 @@ public final class ViewRootImpl implements ViewParent,
 
         private final Choreographer.FrameCallback mFlingFrameCallback =
                 new Choreographer.FrameCallback() {
-
             @Override
             public void doFrame(long frameTimeNanos) {
                 if (!mFlinging) {
+                    return;
+                }
+
+                if (!isTouchKeypadScrollingEnabled()) {
+                    cancelFling();
                     return;
                 }
 
@@ -9301,39 +9232,19 @@ public final class ViewRootImpl implements ViewParent,
                     mFlinging = false;
                     return;
                 }
-
                 int curX = mScroller.getCurrX();
                 int curY = mScroller.getCurrY();
-
                 int deltaX = curX - mLastScrollerX;
                 int deltaY = curY - mLastScrollerY;
-
                 mLastScrollerX = curX;
                 mLastScrollerY = curY;
 
-                /*
-                * Horizontal fling must be negated to match the corrected
-                * ACTION_MOVE sign convention (hScroll = -dx * SCROLL_FACTOR_H).
-                */
                 float hScroll = -deltaX * FLING_SCROLL_FACTOR;
-
-                /*
-                * Keep vertical fling direction consistent with the touch movement.
-                *
-                * ACTION_MOVE uses:
-                *     vScroll = dy * SCROLL_FACTOR_V
-                *
-                * Therefore fling must use the same sign convention.
-                */
                 float vScroll = deltaY * FLING_SCROLL_FACTOR;
 
-                if (hScroll != 0.0f || vScroll != 0.0f) {
-                    sendScroll(
-                            frameTimeNanos / 1_000_000L,
-                            hScroll,
-                            vScroll);
+                if (hScroll != 0 || vScroll != 0) {
+                    sendScroll(frameTimeNanos / 1000000, hScroll, vScroll);
                 }
-
                 mChoreographer.postFrameCallback(this);
             }
         };
