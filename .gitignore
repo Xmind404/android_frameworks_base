@@ -1,0 +1,9 @@
+.idea
+.project
+*.iml
+*.sw*
+gen/
+.vscode/
+*.code-workspace
+.gradle/
+packages/SettingsLib/Spa/gradle/wrapper/gradle-8.11.1-bin.zip
