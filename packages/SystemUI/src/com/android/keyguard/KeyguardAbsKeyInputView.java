@@ -91,4 +91,3 @@ public abstract class KeyguardAbsKeyInputView extends KeyguardInputView {
         boolean onKeyDown(int keyCode, KeyEvent keyEvent);
     }
 }
-
