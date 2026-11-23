@@ -72,6 +72,7 @@ import android.hardware.SystemSensorManager;
 import android.hardware.devicestate.DeviceState;
 import android.hardware.devicestate.DeviceStateManager;
 import android.hardware.display.AmbientDisplayConfiguration;
+import android.hardware.display.BrightnessInfo;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.DisplayManagerInternal;
 import android.hardware.power.Boost;
@@ -122,6 +123,7 @@ import android.util.ArrayMap;
 import android.util.IntArray;
 import android.util.KeyValueListParser;
 import android.util.LongArray;
+import android.util.MathUtils;
 import android.util.PrintWriterPrinter;
 import android.util.Slog;
 import android.util.SparseArray;
@@ -355,9 +357,13 @@ public final class PowerManagerService extends SystemService
     private static final String KEYBOARD_BACKLIGHT_HIGH_BRIGHTNESS_OFF =
             "keyboard_backlight_high_brightness_off";
     private static final String BUTTON_ADAPTIVE_BRIGHTNESS = "button_adaptive_brightness";
+    private static final String KEYBOARD_BACKLIGHT_ENABLED = "keyboard_backlight_enabled";
 
-    // Screen brightness (0-255) at or above which the keyboard backlight may be switched off.
-    private static final int KEYBOARD_HIGH_BRIGHTNESS_OFF_THRESHOLD = 100;
+    // Display brightness (fraction of the panel range, formerly 100/255 on the slider) at
+    // or above which the keyboard backlight may be switched off.
+    private static final float KEYBOARD_HIGH_BRIGHTNESS_OFF_THRESHOLD = 100f / 255f;
+    // Ignore display brightness changes smaller than this, e.g. auto-brightness ramp steps.
+    private static final float DISPLAY_BRIGHTNESS_EPSILON = 0.02f;
     // Lowest keyboard / button backlight scale applied by adaptive brightness.
     private static final float KEYBOARD_ADAPTIVE_MIN_SCALE = 0.1f;
     private static final float BUTTON_ADAPTIVE_MIN_SCALE = 0.01f;
@@ -417,8 +423,11 @@ public final class PowerManagerService extends SystemService
     private boolean mKeyboardAdaptiveBrightness;
     private boolean mKeyboardBacklightHighBrightnessOff;
     private boolean mButtonAdaptiveBrightness;
-    // Cached Settings.System.SCREEN_BRIGHTNESS (0-255), used to scale the backlights.
-    private int mScreenBrightnessSetting = PowerManager.BRIGHTNESS_ON;
+    private boolean mKeyboardBacklightEnabled = true;
+    // Current default display brightness as a fraction of its range. It follows the
+    // ambient light sensor when automatic brightness is on and is used to scale the
+    // keyboard and button backlights.
+    private float mDisplayBrightnessFraction = 1.0f;
 
     @Nullable
     private WindowManagerInternal mWindowManagerInternal;
@@ -880,6 +889,47 @@ public final class PowerManagerService extends SystemService
                     eventTime);
             updateGlobalWakefulnessLocked(eventTime, reason, uid, opUid, opPackageName, details);
             updatePowerStateLocked();
+        }
+    }
+
+    /**
+     * Tracks the default display's current brightness for keyboard/button backlight
+     * scaling. Runs on mHandler; the display manager is queried without holding mLock.
+     */
+    private final class BacklightDisplayBrightnessListener
+            implements DisplayManager.DisplayListener {
+        @Override
+        public void onDisplayAdded(int displayId) {
+        }
+
+        @Override
+        public void onDisplayRemoved(int displayId) {
+        }
+
+        @Override
+        public void onDisplayChanged(int displayId) {
+            if (displayId != Display.DEFAULT_DISPLAY) {
+                return;
+            }
+            final Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            final BrightnessInfo info = display == null ? null : display.getBrightnessInfo();
+            if (info == null) {
+                return;
+            }
+            final float range = info.brightnessMaximum - info.brightnessMinimum;
+            final float fraction = range <= 0.0f ? 1.0f : MathUtils.constrain(
+                    (info.brightness - info.brightnessMinimum) / range, 0.0f, 1.0f);
+            synchronized (mLock) {
+                if (Math.abs(fraction - mDisplayBrightnessFraction) < DISPLAY_BRIGHTNESS_EPSILON
+                        && fraction != 0.0f && fraction != 1.0f) {
+                    return;
+                }
+                mDisplayBrightnessFraction = fraction;
+                if (mKeyboardLight != null || mButtonsLight != null) {
+                    mDirty |= DIRTY_SETTINGS;
+                    updatePowerStateLocked();
+                }
+            }
         }
     }
 
@@ -1586,6 +1636,12 @@ public final class PowerManagerService extends SystemService
                     new DisplayGroupPowerChangeListener();
             mDisplayManagerInternal.registerDisplayGroupListener(displayGroupPowerChangeListener);
             mDisplayManager.registerDisplayListener(new DisplayListener(), mHandler);
+            final BacklightDisplayBrightnessListener brightnessListener =
+                    new BacklightDisplayBrightnessListener();
+            mDisplayManager.registerDisplayListener(brightnessListener, mHandler,
+                    DisplayManager.EVENT_TYPE_DISPLAY_BRIGHTNESS);
+            // Read the initial brightness on mHandler, outside mLock, like later events.
+            mHandler.post(() -> brightnessListener.onDisplayChanged(Display.DEFAULT_DISPLAY));
 
             if (mDreamManager != null) {
                 // This DreamManager method does not acquire a lock, so it should be safe to call.
@@ -1691,9 +1747,6 @@ public final class PowerManagerService extends SystemService
         resolver.registerContentObserver(Settings.System.getUriFor(
                 Settings.System.SCREEN_AUTO_BRIGHTNESS_ADJ),
                 false, mSettingsObserver, UserHandle.USER_ALL);
-        resolver.registerContentObserver(Settings.System.getUriFor(
-                Settings.System.SCREEN_BRIGHTNESS),
-                false, mSettingsObserver, UserHandle.USER_ALL);
         resolver.registerContentObserver(Settings.Global.getUriFor(
                 Settings.Global.THEATER_MODE_ON),
                 false, mSettingsObserver, UserHandle.USER_ALL);
@@ -1733,7 +1786,8 @@ public final class PowerManagerService extends SystemService
                 BUTTON_BACKLIGHT_ON_KEYBOARD_TOUCH,
                 KEYBOARD_ADAPTIVE_BRIGHTNESS,
                 KEYBOARD_BACKLIGHT_HIGH_BRIGHTNESS_OFF,
-                BUTTON_ADAPTIVE_BRIGHTNESS}) {
+                BUTTON_ADAPTIVE_BRIGHTNESS,
+                KEYBOARD_BACKLIGHT_ENABLED}) {
             resolver.registerContentObserver(Settings.Secure.getUriFor(key),
                     false, mSettingsObserver, UserHandle.USER_ALL);
         }
@@ -1910,9 +1964,8 @@ public final class PowerManagerService extends SystemService
                 KEYBOARD_BACKLIGHT_HIGH_BRIGHTNESS_OFF, 1, UserHandle.USER_CURRENT) == 1;
         mButtonAdaptiveBrightness = Settings.Secure.getIntForUser(resolver,
                 BUTTON_ADAPTIVE_BRIGHTNESS, 1, UserHandle.USER_CURRENT) == 1;
-        mScreenBrightnessSetting = Settings.System.getIntForUser(resolver,
-                Settings.System.SCREEN_BRIGHTNESS, PowerManager.BRIGHTNESS_ON,
-                UserHandle.USER_CURRENT);
+        mKeyboardBacklightEnabled = Settings.Secure.getIntForUser(resolver,
+                KEYBOARD_BACKLIGHT_ENABLED, 1, UserHandle.USER_CURRENT) == 1;
 
         mDirty |= DIRTY_SETTINGS;
     }
@@ -3546,19 +3599,19 @@ public final class PowerManagerService extends SystemService
                     if (now < groupNextTimeout) {
                         groupUserActivitySummary = USER_ACTIVITY_SCREEN_BRIGHT;
                         if (wakefulness == WAKEFULNESS_AWAKE) {
-                            // Scale the backlights with the screen brightness slider. Scaling
-                            // and the keyboard high-brightness cutoff are independent options.
-                            final int screenBrightness = mScreenBrightnessSetting;
-                            final float buttonBrightScale = Math.max(BUTTON_ADAPTIVE_MIN_SCALE,
-                                    screenBrightness / (float) PowerManager.BRIGHTNESS_ON);
-                            final float keyboardBrightScale = screenBrightness <= 0 ? 0.0f
+                            // Scale the backlights with the actual display brightness, which
+                            // follows the ambient light sensor under automatic brightness.
+                            // Scaling and the keyboard high-brightness cutoff are independent.
+                            final float displayBrightness = mDisplayBrightnessFraction;
+                            final float buttonBrightScale =
+                                    Math.max(BUTTON_ADAPTIVE_MIN_SCALE, displayBrightness);
+                            final float keyboardBrightScale = displayBrightness <= 0.0f ? 0.0f
                                     : Math.min(1.0f, KEYBOARD_ADAPTIVE_MIN_SCALE
                                             + (1.0f - KEYBOARD_ADAPTIVE_MIN_SCALE)
-                                            * (screenBrightness
-                                                    / (float) PowerManager.BRIGHTNESS_ON));
+                                            * displayBrightness);
                             final boolean keyboardOffForHighBrightness =
                                     mKeyboardBacklightHighBrightnessOff
-                                    && screenBrightness >= KEYBOARD_HIGH_BRIGHTNESS_OFF_THRESHOLD;
+                                    && displayBrightness >= KEYBOARD_HIGH_BRIGHTNESS_OFF_THRESHOLD;
 
                             if (mButtonsLight != null) {
                                 float buttonBrightness = BRIGHTNESS_OFF_FLOAT;
@@ -3627,7 +3680,7 @@ public final class PowerManagerService extends SystemService
                                         && mKeyboardAdaptiveBrightness) {
                                     keyboardBrightness *= keyboardBrightScale;
                                 }
-                                if (keyboardOffForHighBrightness) {
+                                if (keyboardOffForHighBrightness || !mKeyboardBacklightEnabled) {
                                     keyboardBrightness = BRIGHTNESS_OFF_FLOAT;
                                 }
 
@@ -5732,7 +5785,8 @@ public final class PowerManagerService extends SystemService
             pw.println("  mKeyboardBacklightHighBrightnessOff="
                     + mKeyboardBacklightHighBrightnessOff);
             pw.println("  mButtonAdaptiveBrightness=" + mButtonAdaptiveBrightness);
-            pw.println("  mScreenBrightnessSetting=" + mScreenBrightnessSetting);
+            pw.println("  mKeyboardBacklightEnabled=" + mKeyboardBacklightEnabled);
+            pw.println("  mDisplayBrightnessFraction=" + mDisplayBrightnessFraction);
             pw.println("  mUserActivityTimeoutOverrideFromWindowManager="
                     + mUserActivityTimeoutOverrideFromWindowManager);
             pw.println("  mUserInactiveOverrideFromWindowManager="
