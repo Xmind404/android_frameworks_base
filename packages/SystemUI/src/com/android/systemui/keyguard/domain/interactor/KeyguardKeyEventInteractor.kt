@@ -19,6 +19,7 @@ package com.android.systemui.keyguard.domain.interactor
 import android.content.Context
 import android.media.AudioManager
 import android.view.KeyEvent
+import com.android.keyguard.PhysicalKeyboardEntry
 import com.android.systemui.Flags
 import com.android.systemui.back.domain.interactor.BackActionInteractor
 import com.android.systemui.dagger.SysUISingleton
@@ -57,6 +58,20 @@ constructor(
                 KeyEvent.KEYCODE_VOLUME_DOWN,
                 KeyEvent.KEYCODE_VOLUME_UP -> return dispatchVolumeKeyEvent(event)
             }
+        }
+
+        if (
+            statusBarStateController.state == StatusBarState.KEYGUARD &&
+                isDeviceAwake() &&
+                !statusBarKeyguardViewManager.isBouncerShowing &&
+                PhysicalKeyboardEntry.shouldOpenBouncer(context, event) &&
+                statusBarKeyguardViewManager.isSecure
+        ) {
+            // Typing a PIN or password on the built-in keyboard opens the bouncer; the key is
+            // replayed into it so the first character is not lost. Never shown for insecure
+            // keyguards, where showing the bouncer would dismiss the lock screen.
+            PhysicalKeyboardEntry.setPendingKey(event)
+            return collapseShadeLockedOrShowPrimaryBouncer(loggingReason = "Physical keyboard")
         }
 
         if (event.handleAction()) {

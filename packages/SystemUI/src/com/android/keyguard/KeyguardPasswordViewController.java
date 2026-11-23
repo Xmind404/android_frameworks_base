@@ -290,6 +290,17 @@ public class KeyguardPasswordViewController
         if (reason != KeyguardSecurityView.SCREEN_ON || mShowImeAtScreenOn) {
             showInput();
         }
+
+        // Replay a character typed on the lock screen before the bouncer was shown. It is sent
+        // straight to the field so the keyboard's character map decides the character.
+        final KeyEvent pendingKey = PhysicalKeyboardEntry.takePendingKey();
+        if (pendingKey != null) {
+            mPasswordEntry.post(() -> {
+                mPasswordEntry.dispatchKeyEvent(pendingKey);
+                mPasswordEntry.dispatchKeyEvent(
+                        KeyEvent.changeAction(pendingKey, KeyEvent.ACTION_UP));
+            });
+        }
     }
 
     private void showInput() {

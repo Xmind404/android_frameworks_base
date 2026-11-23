@@ -263,6 +263,12 @@ public abstract class KeyguardPinBasedInputViewController<T extends KeyguardPinB
         // it's guaranteed that the view has focus.
         mPasswordEntry.clearFocus();
         mPasswordEntry.requestFocus();
+
+        // Replay a digit typed on the lock screen before the bouncer was shown.
+        final KeyEvent pendingKey = PhysicalKeyboardEntry.takePendingKey();
+        if (pendingKey != null) {
+            mView.onKeyDown(pendingKey.getKeyCode(), pendingKey);
+        }
     }
 
     @Override

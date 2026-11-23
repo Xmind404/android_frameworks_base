@@ -127,6 +127,16 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView 
             mDeleteButton.performClick();
             return true;
         }
+        // Built-in keyboards (e.g. BlackBerry KEY2) carry digits on their Alt layer; take them
+        // from the active character map so PINs can be typed without holding Alt.
+        if (event != null && PhysicalKeyboardEntry.isBuiltInKeyboard(event)
+                && PhysicalKeyboardEntry.isEnabled(getContext())) {
+            final int digit = PhysicalKeyboardEntry.getDigit(event);
+            if (digit >= 0) {
+                performNumberClick(digit);
+                return true;
+            }
+        }
         if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
             int number = keyCode - KeyEvent.KEYCODE_0;
             performNumberClick(number);
