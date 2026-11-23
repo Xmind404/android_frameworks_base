@@ -4521,16 +4521,38 @@ public final class InputMethodManager {
      *
      * @hide
      */
+    private static boolean isImeSwitcherShortcut(KeyEvent event, int mode) {
+        final int keyCode = event.getKeyCode();
+        switch (mode) {
+            case 1:
+                return keyCode == KeyEvent.KEYCODE_SPACE && event.isShiftPressed();
+            case 2:
+                return keyCode == KeyEvent.KEYCODE_CTRL_LEFT
+                        || keyCode == KeyEvent.KEYCODE_CTRL_RIGHT
+                        || keyCode == KeyEvent.KEYCODE_FUNCTION;
+            case 3:
+                return keyCode == KeyEvent.KEYCODE_SYM;
+            default:
+                return keyCode == KeyEvent.KEYCODE_ENTER && event.isAltPressed();
+        }
+    }
+
     public int dispatchInputEvent(InputEvent event, Object token,
             FinishedInputEventCallback callback, Handler handler) {
         synchronized (mH) {
             if (isImeSessionAvailableLocked()) {
                 if (event instanceof KeyEvent) {
                     KeyEvent keyEvent = (KeyEvent)event;
-                    if (keyEvent.getAction() == KeyEvent.ACTION_DOWN
-                            && keyEvent.getKeyCode() == KeyEvent.KEYCODE_SYM
-                            && keyEvent.getRepeatCount() == 0) {
-                        showInputMethodPickerLocked();
+                    final ViewRootImpl rootView = mCurRootView;
+                    final int switcherMode = rootView == null ? 0 : Settings.Secure.getInt(
+                            rootView.mContext.getContentResolver(),
+                            Settings.Secure.IME_SWITCHER_SHORTCUT, 0);
+                    if (keyEvent.getRepeatCount() == 0
+                            && isImeSwitcherShortcut(keyEvent, switcherMode)) {
+                        // Consume both halves of the shortcut; open the picker on press.
+                        if (keyEvent.getAction() == KeyEvent.ACTION_DOWN) {
+                            showInputMethodPickerLocked();
+                        }
                         return DISPATCH_HANDLED;
                     }
                 }

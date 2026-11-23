@@ -78,6 +78,7 @@ public class SecureSettings {
         Settings.Secure.TTS_ENABLED_PLUGINS,
         Settings.Secure.TTS_DEFAULT_LOCALE,
         Settings.Secure.SHOW_IME_WITH_HARD_KEYBOARD,
+        Settings.Secure.IME_SWITCHER_SHORTCUT,
         Settings.Secure.ACCESSIBILITY_BOUNCE_KEYS,
         Settings.Secure.ACCESSIBILITY_SLOW_KEYS,
         Settings.Secure.ACCESSIBILITY_STICKY_KEYS,
