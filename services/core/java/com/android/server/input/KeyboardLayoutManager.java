@@ -568,6 +568,19 @@ class KeyboardLayoutManager implements InputManager.InputDeviceListener {
 
     private KeyboardLayout[] getKeyboardLayoutListForInputDeviceInternal(
             KeyboardIdentifier keyboardIdentifier, @Nullable ImeInfo imeInfo) {
+        final String blackBerryFamily = getBlackBerryKeyboardFamily(keyboardIdentifier);
+        if (blackBerryFamily != null) {
+            // Include the complete family catalog, including transliteration and
+            // the native fallback. Script filtering would remove valid defaults.
+            final ArrayList<KeyboardLayout> familyLayouts = new ArrayList<>();
+            visitAllKeyboardLayouts((resources, resId, layout) -> {
+                if (BlackBerryKeyboardLayoutPolicy.isCompatibleLayout(layout, blackBerryFamily)) {
+                    familyLayouts.add(layout);
+                }
+            });
+            Collections.sort(familyLayouts);
+            return familyLayouts.toArray(new KeyboardLayout[0]);
+        }
         String layoutKey = new LayoutKey(keyboardIdentifier, imeInfo).toString();
 
         // Fetch user selected layout and always include it in layout list.
@@ -593,6 +606,11 @@ class KeyboardLayoutManager implements InputManager.InputDeviceListener {
             @Override
             public void visitKeyboardLayout(Resources resources,
                     int keyboardLayoutResId, KeyboardLayout layout) {
+                // BlackBerry's internal maps must not become automatic candidates
+                // for unrelated USB/Bluetooth keyboards with similar metadata.
+                if (BlackBerryKeyboardLayoutPolicy.isProviderLayout(layout)) {
+                    return;
+                }
                 // Next find any potential layouts that aren't yet enabled for the device. For
                 // devices that have special layouts we assume there's a reason that the generic
                 // layouts don't work for them, so we don't want to return them since it's likely
@@ -644,9 +662,52 @@ class KeyboardLayoutManager implements InputManager.InputDeviceListener {
     }
 
     @Nullable
+    private String getBlackBerryKeyboardFamily(KeyboardIdentifier identifier) {
+        if (identifier.mIdentifier.getVendorId() != BlackBerryKeyboardLayoutPolicy.VENDOR_ID
+                || identifier.mIdentifier.getProductId()
+                        != BlackBerryKeyboardLayoutPolicy.PRODUCT_ID) {
+            return null;
+        }
+        final InputDevice device = getInputDevice(identifier.mIdentifier);
+        return device == null ? null : BlackBerryKeyboardLayoutPolicy.getFamily(
+                device.getName(), device.getVendorId(), device.getProductId(),
+                device.isExternal(), device.isVirtual());
+    }
+
+    @Nullable
     private KeyboardLayoutSelectionResult getKeyboardLayoutForInputDeviceInternal(
             KeyboardIdentifier keyboardIdentifier, @Nullable ImeInfo imeInfo) {
         String layoutKey = new LayoutKey(keyboardIdentifier, imeInfo).toString();
+        final String blackBerryFamily = getBlackBerryKeyboardFamily(keyboardIdentifier);
+        if (blackBerryFamily != null) {
+            String userDescriptor;
+            synchronized (mDataStore) {
+                userDescriptor = mDataStore.getKeyboardLayout(
+                        keyboardIdentifier.toString(), layoutKey);
+            }
+            final InputMethodSubtype subtype = imeInfo == null ? null : imeInfo.mImeSubtype;
+            final String imePackage = imeInfo == null || imeInfo.mImeSubtypeHandle == null
+                    ? null : imeInfo.mImeSubtypeHandle.getComponentName().getPackageName();
+            final ULocale hint = subtype == null ? null
+                    : subtype.getPhysicalKeyboardHintLanguageTag();
+            final String languageTag = subtype == null ? ""
+                    : hint != null ? hint.toLanguageTag() : subtype.getCanonicalizedLanguageTag();
+            final String keyboardLayoutSet = subtype == null ? null
+                    : subtype.getExtraValueOf("KeyboardLayoutSet");
+            // Deliberately bypass the generic cache: a provider update can alter
+            // locale metadata while keeping exactly the same layout descriptors.
+            final KeyboardLayoutSelectionResult result = BlackBerryKeyboardLayoutPolicy.select(
+                    blackBerryFamily,
+                    getKeyboardLayoutListForInputDeviceInternal(keyboardIdentifier, imeInfo),
+                    userDescriptor, imePackage, subtype == null ? 0 : subtype.hashCode(), languageTag,
+                    keyboardLayoutSet);
+            if (DEBUG) {
+                Slog.d(TAG, "BlackBerry layout: family=" + blackBerryFamily + ", tag="
+                        + languageTag + ", subtype=" + (subtype == null ? 0 : subtype.hashCode())
+                        + ", result=" + result);
+            }
+            return result;
+        }
         synchronized (mDataStore) {
             String layout = mDataStore.getKeyboardLayout(keyboardIdentifier.toString(), layoutKey);
             if (layout != null) {
