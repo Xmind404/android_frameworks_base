@@ -9009,6 +9009,18 @@ public final class ViewRootImpl implements ViewParent,
     private static final String TOUCH_KEYPAD_SCROLLING_DISABLED_PROPERTY =
             "persist.vendor.touchkeypad.scrolling_disabled";
 
+    private static final String TOUCH_KEYPAD_SENSITIVITY_PROPERTY =
+            "persist.vendor.touchkeypad.sensitivity";
+
+    /**
+     * User scroll speed of the touch keypad as a multiplier (50-200 %, default 100 % = the
+     * handler's tuned constants).
+     */
+    private static float getTouchKeypadSensitivity() {
+        final int percent = SystemProperties.getInt(TOUCH_KEYPAD_SENSITIVITY_PROPERTY, 100);
+        return Math.max(50, Math.min(200, percent)) / 100f;
+    }
+
     private static boolean isTouchKeypadScrollingEnabled() {
         return !SystemProperties.getBoolean(
                 TOUCH_KEYPAD_SCROLLING_DISABLED_PROPERTY, false);
@@ -9737,6 +9749,7 @@ public final class ViewRootImpl implements ViewParent,
         private float mMappedX;
         private float mMappedY;
         private boolean mAxisLocked;
+        private float mSensitivity = 1f;
         private boolean mHorizontalLock;
         private boolean mFlinging;
         private OverScroller mScroller;
@@ -9791,6 +9804,7 @@ public final class ViewRootImpl implements ViewParent,
                         mMappedY = mStartY;
                     }
                     mAxisLocked = false;
+                    mSensitivity = getTouchKeypadSensitivity();
                     break;
                 case MotionEvent.ACTION_MOVE:
                     if (mVelocityTracker != null) {
@@ -9814,9 +9828,9 @@ public final class ViewRootImpl implements ViewParent,
                         float hScroll = 0;
                         float vScroll = 0;
                         if (mHorizontalLock) {
-                            hScroll = -dx * SCROLL_FACTOR;
+                            hScroll = -dx * SCROLL_FACTOR * mSensitivity;
                         } else {
-                            vScroll = dy * SCROLL_FACTOR;
+                            vScroll = dy * SCROLL_FACTOR * mSensitivity;
                         }
                         if (hScroll != 0 || vScroll != 0) {
                             sendScroll(event.getEventTime(), hScroll, vScroll);
@@ -9928,8 +9942,8 @@ public final class ViewRootImpl implements ViewParent,
                 mLastScrollerX = curX;
                 mLastScrollerY = curY;
 
-                float hScroll = deltaX * FLING_SCROLL_FACTOR;
-                float vScroll = deltaY * FLING_SCROLL_FACTOR;
+                float hScroll = deltaX * FLING_SCROLL_FACTOR * mSensitivity;
+                float vScroll = deltaY * FLING_SCROLL_FACTOR * mSensitivity;
 
                 if (hScroll != 0 || vScroll != 0) {
                     sendScroll(frameTimeNanos / 1000000, hScroll, vScroll);
