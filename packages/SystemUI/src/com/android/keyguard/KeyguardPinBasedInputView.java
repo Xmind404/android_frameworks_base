@@ -192,9 +192,18 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView 
     }
 
     private void performNumberClick(int number) {
-        if (number >= 0 && number <= 9) {
-            mButtons[getNumberIndex(number)].performClick();
+        if (number < 0 || number > 9) {
+            return;
         }
+        // Click the key that currently shows this digit, so hardware digits stay correct with a
+        // scrambled PIN pad regardless of how the scrambled keys are laid out.
+        for (NumPadKey button : mButtons) {
+            if (button != null && button.getDigit() == number) {
+                button.performClick();
+                return;
+            }
+        }
+        mButtons[getNumberIndex(number)].performClick();
     }
 
     @Override

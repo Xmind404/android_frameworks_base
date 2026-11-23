@@ -138,6 +138,11 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener, Num
         }
     }
 
+    /** Returns the digit this key currently enters (it can change with PIN scrambling). */
+    public int getDigit() {
+        return mDigit;
+    }
+
     public void setDigit(int digit) {
         mDigit = digit;
         updateText();
