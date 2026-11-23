@@ -72,9 +72,6 @@ public abstract class AbstractInputMethodService extends WindowProviderService
         implements KeyEvent.Callback {
     private InputMethod mInputMethod;
 
-    private final BlackBerryKeyboardCompat mBlackBerryKeyboardCompat =
-            new BlackBerryKeyboardCompat();
-
     /**
      * @return {@link InputMethod} instance returned from {@link #onCreateInputMethodInterface()}.
      *         {@code null} if {@link #onCreateInputMethodInterface()} is not yet called.
@@ -187,11 +184,8 @@ public abstract class AbstractInputMethodService extends WindowProviderService
          */
         @Override
         public void dispatchKeyEvent(int seq, KeyEvent event, EventCallback callback) {
-            boolean handled;
-            try (BlackBerryKeyboardCompat.Scope scope = mBlackBerryKeyboardCompat.begin(
-                    AbstractInputMethodService.this, event)) {
-                handled = event.dispatch(AbstractInputMethodService.this, mDispatcherState, this);
-            }
+            boolean handled = event.dispatch(AbstractInputMethodService.this,
+                    mDispatcherState, this);
             if (callback != null) {
                 callback.finishedEvent(seq, handled);
             }
