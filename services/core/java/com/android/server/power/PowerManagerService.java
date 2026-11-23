@@ -340,7 +340,27 @@ public final class PowerManagerService extends SystemService
 
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("MM-dd HH:mm:ss.SSS");
 
-    private static final int DEFAULT_BUTTON_ON_DURATION = 5 * 1000;
+    private static final int DEFAULT_BUTTON_ON_DURATION = 10 * 1000;
+    private static final int DEFAULT_KEYBOARD_ON_DURATION = 10 * 1000;
+
+    // Keyboard/button backlight options without a LineageSettings equivalent. Brightness,
+    // button timeout and button press-only mode use the existing LineageSettings keys.
+    private static final String KEYBOARD_BACKLIGHT_TIMEOUT = "keyboard_backlight_timeout";
+    private static final String KEYBOARD_BACKLIGHT_ONLY_WHEN_PRESSED =
+            "keyboard_backlight_only_when_pressed";
+    private static final String KEYBOARD_BACKLIGHT_ON_TOUCH = "keyboard_backlight_on_touch";
+    private static final String BUTTON_BACKLIGHT_ON_KEYBOARD_TOUCH =
+            "button_backlight_on_keyboard_touch";
+    private static final String KEYBOARD_ADAPTIVE_BRIGHTNESS = "keyboard_adaptive_brightness";
+    private static final String KEYBOARD_BACKLIGHT_HIGH_BRIGHTNESS_OFF =
+            "keyboard_backlight_high_brightness_off";
+    private static final String BUTTON_ADAPTIVE_BRIGHTNESS = "button_adaptive_brightness";
+
+    // Screen brightness (0-255) at or above which the keyboard backlight may be switched off.
+    private static final int KEYBOARD_HIGH_BRIGHTNESS_OFF_THRESHOLD = 100;
+    // Lowest keyboard / button backlight scale applied by adaptive brightness.
+    private static final float KEYBOARD_ADAPTIVE_MIN_SCALE = 0.1f;
+    private static final float BUTTON_ADAPTIVE_MIN_SCALE = 0.01f;
 
     private final Context mContext;
     private final ServiceThread mHandlerThread;
@@ -385,11 +405,20 @@ public final class PowerManagerService extends SystemService
     private LogicalLight mKeyboardLight;
 
     private int mButtonTimeout;
+    private int mKeyboardTimeout;
     private float mButtonBrightness;
     private boolean mKeyboardVisible;
     private float mKeyboardBrightness;
 
     private boolean mButtonLightOnKeypressOnly;
+    private boolean mKeyboardLightOnKeypressOnly;
+    private boolean mKeyboardLightOnTouch;
+    private boolean mButtonLightOnKeyboardTouch;
+    private boolean mKeyboardAdaptiveBrightness;
+    private boolean mKeyboardBacklightHighBrightnessOff;
+    private boolean mButtonAdaptiveBrightness;
+    // Cached Settings.System.SCREEN_BRIGHTNESS (0-255), used to scale the backlights.
+    private int mScreenBrightnessSetting = PowerManager.BRIGHTNESS_ON;
 
     @Nullable
     private WindowManagerInternal mWindowManagerInternal;
@@ -807,13 +836,33 @@ public final class PowerManagerService extends SystemService
             mWakefulnessChanging = true;
             mDirty |= DIRTY_WAKEFULNESS;
             mInjector.invalidateIsInteractiveCaches();
+
+            final PowerGroup powerGroup = mPowerGroups.get(groupId);
+            if (wakefulness != WAKEFULNESS_AWAKE) {
+                // Clear the backlight latch as soon as this group leaves the fully awake
+                // state. A power-button sleep normally enters DOZING, so waiting for ASLEEP
+                // is too late and is not guaranteed before the next wake.
+                powerGroup.setButtonPressedLocked(false);
+                powerGroup.setButtonOnLocked(false);
+                powerGroup.setKeyboardPressedLocked(false);
+                powerGroup.setKeyboardOnLocked(false);
+                if (groupId == Display.DEFAULT_DISPLAY_GROUP) {
+                    if (mButtonsLight != null) {
+                        mButtonsLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
+                    }
+                    if (mKeyboardLight != null) {
+                        mKeyboardLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
+                    }
+                }
+            }
+
             if (wakefulness == WAKEFULNESS_AWAKE) {
                 // Kick user activity to prevent newly awake group from timing out instantly.
                 // The dream may end without user activity if the dream app crashes / is updated,
                 // don't poke the user activity timer for these wakes.
                 int flags = reason == PowerManager.WAKE_REASON_DREAM_FINISHED
                         ? PowerManager.USER_ACTIVITY_FLAG_NO_CHANGE_LIGHTS : 0;
-                userActivityNoUpdateLocked(mPowerGroups.get(groupId), eventTime,
+                userActivityNoUpdateLocked(powerGroup, eventTime,
                         PowerManager.USER_ACTIVITY_EVENT_OTHER, flags, uid);
             }
 
@@ -1642,6 +1691,9 @@ public final class PowerManagerService extends SystemService
         resolver.registerContentObserver(Settings.System.getUriFor(
                 Settings.System.SCREEN_AUTO_BRIGHTNESS_ADJ),
                 false, mSettingsObserver, UserHandle.USER_ALL);
+        resolver.registerContentObserver(Settings.System.getUriFor(
+                Settings.System.SCREEN_BRIGHTNESS),
+                false, mSettingsObserver, UserHandle.USER_ALL);
         resolver.registerContentObserver(Settings.Global.getUriFor(
                 Settings.Global.THEATER_MODE_ON),
                 false, mSettingsObserver, UserHandle.USER_ALL);
@@ -1674,6 +1726,17 @@ public final class PowerManagerService extends SystemService
         resolver.registerContentObserver(LineageSettings.Secure.getUriFor(
                 LineageSettings.Secure.KEYBOARD_BRIGHTNESS),
                 false, mSettingsObserver, UserHandle.USER_ALL);
+        for (String key : new String[] {
+                KEYBOARD_BACKLIGHT_TIMEOUT,
+                KEYBOARD_BACKLIGHT_ONLY_WHEN_PRESSED,
+                KEYBOARD_BACKLIGHT_ON_TOUCH,
+                BUTTON_BACKLIGHT_ON_KEYBOARD_TOUCH,
+                KEYBOARD_ADAPTIVE_BRIGHTNESS,
+                KEYBOARD_BACKLIGHT_HIGH_BRIGHTNESS_OFF,
+                BUTTON_ADAPTIVE_BRIGHTNESS}) {
+            resolver.registerContentObserver(Settings.Secure.getUriFor(key),
+                    false, mSettingsObserver, UserHandle.USER_ALL);
+        }
 
         // Register for broadcasts from other components of the system.
         IntentFilter filter = new IntentFilter();
@@ -1830,6 +1893,25 @@ public final class PowerManagerService extends SystemService
                 0, UserHandle.USER_CURRENT) == 1;
         mKeyboardBrightness = LineageSettings.Secure.getFloatForUser(resolver,
                 LineageSettings.Secure.KEYBOARD_BRIGHTNESS, mKeyboardBrightnessDefault,
+                UserHandle.USER_CURRENT);
+
+        mKeyboardTimeout = Settings.Secure.getIntForUser(resolver,
+                KEYBOARD_BACKLIGHT_TIMEOUT, DEFAULT_KEYBOARD_ON_DURATION,
+                UserHandle.USER_CURRENT);
+        mKeyboardLightOnKeypressOnly = Settings.Secure.getIntForUser(resolver,
+                KEYBOARD_BACKLIGHT_ONLY_WHEN_PRESSED, 0, UserHandle.USER_CURRENT) == 1;
+        mKeyboardLightOnTouch = Settings.Secure.getIntForUser(resolver,
+                KEYBOARD_BACKLIGHT_ON_TOUCH, 0, UserHandle.USER_CURRENT) == 1;
+        mButtonLightOnKeyboardTouch = Settings.Secure.getIntForUser(resolver,
+                BUTTON_BACKLIGHT_ON_KEYBOARD_TOUCH, 0, UserHandle.USER_CURRENT) == 1;
+        mKeyboardAdaptiveBrightness = Settings.Secure.getIntForUser(resolver,
+                KEYBOARD_ADAPTIVE_BRIGHTNESS, 1, UserHandle.USER_CURRENT) == 1;
+        mKeyboardBacklightHighBrightnessOff = Settings.Secure.getIntForUser(resolver,
+                KEYBOARD_BACKLIGHT_HIGH_BRIGHTNESS_OFF, 1, UserHandle.USER_CURRENT) == 1;
+        mButtonAdaptiveBrightness = Settings.Secure.getIntForUser(resolver,
+                BUTTON_ADAPTIVE_BRIGHTNESS, 1, UserHandle.USER_CURRENT) == 1;
+        mScreenBrightnessSetting = Settings.System.getIntForUser(resolver,
+                Settings.System.SCREEN_BRIGHTNESS, PowerManager.BRIGHTNESS_ON,
                 UserHandle.USER_CURRENT);
 
         mDirty |= DIRTY_SETTINGS;
@@ -2370,6 +2452,42 @@ public final class PowerManagerService extends SystemService
      *
      * This should <b>not</b> be called with {@link #mLock} held.
      */
+    // Called from native input dispatch for SOURCE_TOUCHPAD motion (the keyboard touch
+    // surface), throttled in JNI.
+    @SuppressWarnings("unused")
+    private void touchpadActivityFromNative(long eventTime) {
+        synchronized (mLock) {
+            final boolean lightKeyboard = mKeyboardLightOnKeypressOnly && mKeyboardLightOnTouch
+                    && mKeyboardLight != null;
+            final boolean lightButtons = mButtonLightOnKeypressOnly && mButtonLightOnKeyboardTouch
+                    && mButtonsLight != null;
+            if (!lightKeyboard && !lightButtons) {
+                return;
+            }
+
+            final PowerGroup powerGroup = mPowerGroups.get(Display.DEFAULT_DISPLAY_GROUP);
+            if (powerGroup == null || powerGroup.getWakefulnessLocked() != WAKEFULNESS_AWAKE) {
+                return;
+            }
+
+            boolean changed = false;
+            if (lightKeyboard && eventTime > powerGroup.getLastKeyboardActivityTimeLocked()) {
+                powerGroup.setKeyboardPressedLocked(true);
+                powerGroup.setLastKeyboardActivityTimeLocked(eventTime);
+                changed = true;
+            }
+            if (lightButtons && eventTime > powerGroup.getLastButtonActivityTimeLocked()) {
+                powerGroup.setButtonPressedLocked(true);
+                powerGroup.setLastButtonActivityTimeLocked(eventTime);
+                changed = true;
+            }
+            if (changed) {
+                mDirty |= DIRTY_USER_ACTIVITY;
+                updatePowerStateLocked();
+            }
+        }
+    }
+
     private void userActivityInternal(int displayId, long eventTime,
             @PowerManager.UserActivityEvent int event, int flags, int uid) {
         synchronized (mLock) {
@@ -2487,13 +2605,19 @@ public final class PowerManagerService extends SystemService
                 }
             } else {
                 if (eventTime > powerGroup.getLastUserActivityTimeLocked()) {
-                    powerGroup.setButtonPressedLocked(
-                            event == PowerManager.USER_ACTIVITY_EVENT_BUTTON);
-                    if (eventTime == powerGroup.getLastWakeTimeLocked() ||
-                            (mButtonLightOnKeypressOnly && powerGroup.getButtonPressedLocked() &&
-                            (flags & PowerManager.USER_ACTIVITY_FLAG_NO_BUTTON_LIGHTS) == 0)) {
-                        powerGroup.setButtonPressedLocked(true);
-                        powerGroup.setLastButtonActivityTimeLocked(eventTime);
+                    // Navigation button and keyboard presses are reported separately through
+                    // notifyKeyPressed(), so press-only lighting follows the input that was
+                    // actually used. A plain wake only lights backlights that are not in
+                    // press-only mode.
+                    if (eventTime == powerGroup.getLastWakeTimeLocked()) {
+                        if (!mButtonLightOnKeypressOnly) {
+                            powerGroup.setButtonPressedLocked(true);
+                            powerGroup.setLastButtonActivityTimeLocked(eventTime);
+                        }
+                        if (!mKeyboardLightOnKeypressOnly) {
+                            powerGroup.setKeyboardPressedLocked(true);
+                            powerGroup.setLastKeyboardActivityTimeLocked(eventTime);
+                        }
                     }
                     powerGroup.setLastUserActivityTimeLocked(eventTime, event);
                     mDirty |= DIRTY_USER_ACTIVITY;
@@ -3422,6 +3546,20 @@ public final class PowerManagerService extends SystemService
                     if (now < groupNextTimeout) {
                         groupUserActivitySummary = USER_ACTIVITY_SCREEN_BRIGHT;
                         if (wakefulness == WAKEFULNESS_AWAKE) {
+                            // Scale the backlights with the screen brightness slider. Scaling
+                            // and the keyboard high-brightness cutoff are independent options.
+                            final int screenBrightness = mScreenBrightnessSetting;
+                            final float buttonBrightScale = Math.max(BUTTON_ADAPTIVE_MIN_SCALE,
+                                    screenBrightness / (float) PowerManager.BRIGHTNESS_ON);
+                            final float keyboardBrightScale = screenBrightness <= 0 ? 0.0f
+                                    : Math.min(1.0f, KEYBOARD_ADAPTIVE_MIN_SCALE
+                                            + (1.0f - KEYBOARD_ADAPTIVE_MIN_SCALE)
+                                            * (screenBrightness
+                                                    / (float) PowerManager.BRIGHTNESS_ON));
+                            final boolean keyboardOffForHighBrightness =
+                                    mKeyboardBacklightHighBrightnessOff
+                                    && screenBrightness >= KEYBOARD_HIGH_BRIGHTNESS_OFF_THRESHOLD;
+
                             if (mButtonsLight != null) {
                                 float buttonBrightness = BRIGHTNESS_OFF_FLOAT;
                                 if (isValidBrightness(
@@ -3434,6 +3572,10 @@ public final class PowerManagerService extends SystemService
                                 } else if (isValidButtonBrightness(mButtonBrightness)) {
                                     buttonBrightness = mButtonBrightness;
                                 }
+                                if (buttonBrightness > BRIGHTNESS_OFF_FLOAT
+                                        && mButtonAdaptiveBrightness) {
+                                    buttonBrightness *= buttonBrightScale;
+                                }
 
                                 if (!mButtonLightOnKeypressOnly) {
                                     powerGroup.setLastButtonActivityTimeLocked(
@@ -3442,7 +3584,7 @@ public final class PowerManagerService extends SystemService
                                 final long lastButtonActivityTimeout = mButtonTimeout +
                                         powerGroup.getLastButtonActivityTimeLocked();
 
-                                if (mButtonTimeout != 0 && now > lastButtonActivityTimeout) {
+                                if (mButtonTimeout > 0 && now >= lastButtonActivityTimeout) {
                                     mButtonsLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
                                     powerGroup.setButtonOnLocked(false);
                                 } else {
@@ -3450,17 +3592,22 @@ public final class PowerManagerService extends SystemService
                                             powerGroup.getButtonPressedLocked())) {
                                         mButtonsLight.setBrightness(buttonBrightness);
                                         powerGroup.setButtonPressedLocked(false);
-                                        if (buttonBrightness != BRIGHTNESS_OFF_FLOAT &&
-                                                mButtonTimeout != 0) {
+                                        if (buttonBrightness != BRIGHTNESS_OFF_FLOAT) {
                                             powerGroup.setButtonOnLocked(true);
-                                            if (now + mButtonTimeout < nextTimeout) {
-                                                groupNextTimeout = now + mButtonTimeout;
+                                            if (mButtonTimeout > 0 &&
+                                                    lastButtonActivityTimeout < groupNextTimeout) {
+                                                groupNextTimeout = lastButtonActivityTimeout;
                                             }
                                         }
-                                    } else if (mButtonLightOnKeypressOnly &&
-                                            lastButtonActivityTimeout < nextTimeout &&
+                                    } else if (mButtonLightOnKeypressOnly && mButtonTimeout > 0 &&
+                                            lastButtonActivityTimeout < groupNextTimeout &&
                                             powerGroup.getButtonOnLocked()) {
                                         groupNextTimeout = lastButtonActivityTimeout;
+                                    } else if (mButtonLightOnKeypressOnly &&
+                                            !powerGroup.getButtonOnLocked()) {
+                                        // Keep it off until a navigation button press
+                                        // explicitly enables it.
+                                        mButtonsLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
                                     }
                                 }
                             }
@@ -3476,8 +3623,46 @@ public final class PowerManagerService extends SystemService
                                 } else if (isValidKeyboardBrightness(mKeyboardBrightness)) {
                                     keyboardBrightness = mKeyboardBrightness;
                                 }
-                                mKeyboardLight.setBrightness(mKeyboardVisible ?
-                                        keyboardBrightness : BRIGHTNESS_OFF_FLOAT);
+                                if (keyboardBrightness > BRIGHTNESS_OFF_FLOAT
+                                        && mKeyboardAdaptiveBrightness) {
+                                    keyboardBrightness *= keyboardBrightScale;
+                                }
+                                if (keyboardOffForHighBrightness) {
+                                    keyboardBrightness = BRIGHTNESS_OFF_FLOAT;
+                                }
+
+                                if (!mKeyboardLightOnKeypressOnly) {
+                                    powerGroup.setLastKeyboardActivityTimeLocked(
+                                            lastUserActivityTime);
+                                }
+                                final long lastKeyboardActivityTimeout = mKeyboardTimeout +
+                                        powerGroup.getLastKeyboardActivityTimeLocked();
+
+                                if (mKeyboardTimeout > 0 && now >= lastKeyboardActivityTimeout) {
+                                    keyboardBrightness = BRIGHTNESS_OFF_FLOAT;
+                                    powerGroup.setKeyboardOnLocked(false);
+                                } else if (!mKeyboardLightOnKeypressOnly ||
+                                        powerGroup.getKeyboardPressedLocked()) {
+                                    powerGroup.setKeyboardPressedLocked(false);
+                                    if (keyboardBrightness != BRIGHTNESS_OFF_FLOAT) {
+                                        powerGroup.setKeyboardOnLocked(true);
+                                        if (mKeyboardTimeout > 0 &&
+                                                lastKeyboardActivityTimeout < groupNextTimeout) {
+                                            groupNextTimeout = lastKeyboardActivityTimeout;
+                                        }
+                                    }
+                                } else if (mKeyboardTimeout > 0 &&
+                                        lastKeyboardActivityTimeout < groupNextTimeout &&
+                                        powerGroup.getKeyboardOnLocked()) {
+                                    groupNextTimeout = lastKeyboardActivityTimeout;
+                                } else if (!powerGroup.getKeyboardOnLocked()) {
+                                    keyboardBrightness = BRIGHTNESS_OFF_FLOAT;
+                                }
+
+                                // The KEY2 keyboard is permanently exposed, so a stale
+                                // keyboard-visibility flag must not gate it; settings,
+                                // scaling and timeouts above decide the final state.
+                                mKeyboardLight.setBrightness(keyboardBrightness);
                             }
                         }
                     } else {
@@ -3491,6 +3676,7 @@ public final class PowerManagerService extends SystemService
                                 }
                                 if (mKeyboardLight != null) {
                                     mKeyboardLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
+                                    powerGroup.setKeyboardOnLocked(false);
                                 }
                             }
                         }
@@ -5159,6 +5345,25 @@ public final class PowerManagerService extends SystemService
         }
     }
 
+    private void notifyKeyPressedInternal(boolean isKeyboardKey) {
+        synchronized (mLock) {
+            final PowerGroup powerGroup = mPowerGroups.get(Display.DEFAULT_DISPLAY_GROUP);
+            if (powerGroup == null) {
+                return;
+            }
+            final long now = mClock.uptimeMillis();
+            if (isKeyboardKey) {
+                powerGroup.setKeyboardPressedLocked(true);
+                powerGroup.setLastKeyboardActivityTimeLocked(now);
+            } else {
+                powerGroup.setButtonPressedLocked(true);
+                powerGroup.setLastButtonActivityTimeLocked(now);
+            }
+            mDirty |= DIRTY_USER_ACTIVITY;
+            updatePowerStateLocked();
+        }
+    }
+
     private void setUserInactiveOverrideFromWindowManagerInternal() {
         synchronized (mLock) {
             mUserInactiveOverrideFromWindowManager = true;
@@ -5515,7 +5720,19 @@ public final class PowerManagerService extends SystemService
             pw.println("  mButtonBrightness=" + mButtonBrightness);
             pw.println("  mButtonBrightnessOverrideFromWindowManager="
                     + mButtonBrightnessOverrideFromWindowManager);
+            pw.println("  mKeyboardVisible=" + mKeyboardVisible);
             pw.println("  mKeyboardBrightness=" + mKeyboardBrightness);
+            pw.println("  mButtonTimeout=" + mButtonTimeout);
+            pw.println("  mKeyboardTimeout=" + mKeyboardTimeout);
+            pw.println("  mButtonLightOnKeypressOnly=" + mButtonLightOnKeypressOnly);
+            pw.println("  mKeyboardLightOnKeypressOnly=" + mKeyboardLightOnKeypressOnly);
+            pw.println("  mKeyboardLightOnTouch=" + mKeyboardLightOnTouch);
+            pw.println("  mButtonLightOnKeyboardTouch=" + mButtonLightOnKeyboardTouch);
+            pw.println("  mKeyboardAdaptiveBrightness=" + mKeyboardAdaptiveBrightness);
+            pw.println("  mKeyboardBacklightHighBrightnessOff="
+                    + mKeyboardBacklightHighBrightnessOff);
+            pw.println("  mButtonAdaptiveBrightness=" + mButtonAdaptiveBrightness);
+            pw.println("  mScreenBrightnessSetting=" + mScreenBrightnessSetting);
             pw.println("  mUserActivityTimeoutOverrideFromWindowManager="
                     + mUserActivityTimeoutOverrideFromWindowManager);
             pw.println("  mUserInactiveOverrideFromWindowManager="
@@ -8205,6 +8422,11 @@ public final class PowerManagerService extends SystemService
         @Override
         public void setUserInactiveOverrideFromWindowManager() {
             setUserInactiveOverrideFromWindowManagerInternal();
+        }
+
+        @Override
+        public void notifyKeyPressed(boolean isKeyboardKey) {
+            notifyKeyPressedInternal(isKeyboardKey);
         }
 
         @Override

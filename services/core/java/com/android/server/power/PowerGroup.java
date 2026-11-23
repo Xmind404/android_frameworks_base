@@ -93,6 +93,9 @@ public class PowerGroup {
     private boolean mButtonOn;
     private boolean mButtonPressed;
     private long mLastButtonActivityTime;
+    private boolean mKeyboardOn;
+    private boolean mKeyboardPressed;
+    private long mLastKeyboardActivityTime;
     private long mLastPowerOnTime;
     private long mLastUserActivityTime;
     private long mLastUserActivityTimeNoChangeLights;
@@ -449,6 +452,18 @@ public class PowerGroup {
         return mLastButtonActivityTime;
     }
 
+    boolean getKeyboardPressedLocked() {
+        return mKeyboardPressed;
+    }
+
+    boolean getKeyboardOnLocked() {
+        return mKeyboardOn;
+    }
+
+    long getLastKeyboardActivityTimeLocked() {
+        return mLastKeyboardActivityTime;
+    }
+
     long getLastUserActivityTimeLocked() {
         return mLastUserActivityTime;
     }
@@ -463,6 +478,18 @@ public class PowerGroup {
 
     void setLastButtonActivityTimeLocked(long lastButtonActivityTime) {
         mLastButtonActivityTime = lastButtonActivityTime;
+    }
+
+    void setKeyboardPressedLocked(boolean pressed) {
+        mKeyboardPressed = pressed;
+    }
+
+    void setKeyboardOnLocked(boolean on) {
+        mKeyboardOn = on;
+    }
+
+    void setLastKeyboardActivityTimeLocked(long lastKeyboardActivityTime) {
+        mLastKeyboardActivityTime = lastKeyboardActivityTime;
     }
 
     void setLastUserActivityTimeLocked(long lastUserActivityTime,

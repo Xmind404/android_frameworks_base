@@ -60,12 +60,18 @@ namespace android {
 
 static struct {
     jmethodID userActivityFromNative;
+    jmethodID touchpadActivityFromNative;
 } gPowerManagerServiceClassInfo;
 
 // ----------------------------------------------------------------------------
 
 static jobject gPowerManagerServiceObj;
 static power::PowerHalController gPowerHalController;
+
+// Touchpad activity is only used to light the keyboard/button backlights;
+// a 100 ms granularity is far below their timeouts.
+static const nsecs_t MIN_TIME_BETWEEN_TOUCHPAD_ACTIVITIES = 100 * 1000000L; // 100ms
+static nsecs_t gLastTouchpadActivityTime = LLONG_MIN;
 
 // ----------------------------------------------------------------------------
 
@@ -122,6 +128,31 @@ void android_server_PowerManagerService_userActivity(nsecs_t eventTime, int32_t 
                             flags);
         checkAndClearExceptionFromCallback(env, "userActivityFromNative");
     }
+}
+
+void android_server_PowerManagerService_touchpadActivity(nsecs_t eventTime) {
+    if (!gPowerManagerServiceObj) {
+        return;
+    }
+
+    nsecs_t now = systemTime(SYSTEM_TIME_MONOTONIC);
+    if (eventTime > now) {
+        eventTime = now;
+    }
+
+    // Touchpad MOVE events can arrive rapidly. Throttle them instead of entering
+    // PowerManagerService for every frame.
+    if (gLastTouchpadActivityTime != LLONG_MIN &&
+            eventTime - gLastTouchpadActivityTime < MIN_TIME_BETWEEN_TOUCHPAD_ACTIVITIES) {
+        return;
+    }
+    gLastTouchpadActivityTime = eventTime;
+
+    JNIEnv* env = AndroidRuntime::getJNIEnv();
+    env->CallVoidMethod(gPowerManagerServiceObj,
+            gPowerManagerServiceClassInfo.touchpadActivityFromNative,
+            nanoseconds_to_milliseconds(eventTime));
+    checkAndClearExceptionFromCallback(env, "touchpadActivityFromNative");
 }
 
 static std::shared_ptr<ISystemSuspend> gSuspendHal = nullptr;
@@ -281,6 +312,9 @@ int register_android_server_PowerManagerService(JNIEnv* env) {
 
     GET_METHOD_ID(gPowerManagerServiceClassInfo.userActivityFromNative, clazz,
             "userActivityFromNative", "(JIII)V");
+
+    GET_METHOD_ID(gPowerManagerServiceClassInfo.touchpadActivityFromNative,
+            clazz, "touchpadActivityFromNative", "(J)V");
 
     gPowerManagerServiceObj = NULL;
     return 0;
