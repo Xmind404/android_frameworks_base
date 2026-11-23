@@ -9942,7 +9942,8 @@ public final class ViewRootImpl implements ViewParent,
                 mLastScrollerX = curX;
                 mLastScrollerY = curY;
 
-                float hScroll = deltaX * FLING_SCROLL_FACTOR * mSensitivity;
+                // Same sign as the drag (hScroll = -dx): keep the fling moving with the finger.
+                float hScroll = -deltaX * FLING_SCROLL_FACTOR * mSensitivity;
                 float vScroll = deltaY * FLING_SCROLL_FACTOR * mSensitivity;
 
                 if (hScroll != 0 || vScroll != 0) {
