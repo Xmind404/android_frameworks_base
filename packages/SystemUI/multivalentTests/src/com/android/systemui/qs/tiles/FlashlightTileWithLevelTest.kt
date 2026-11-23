@@ -30,6 +30,7 @@ import com.android.systemui.classifier.FalsingManagerFake
 import com.android.systemui.flashlight.data.repository.startFlashlightRepository
 import com.android.systemui.flashlight.domain.interactor.flashlightInteractor
 import com.android.systemui.flashlight.shared.model.FlashlightModel
+import com.android.systemui.flashlight.dualtone.DualToneTorch
 import com.android.systemui.kosmos.runCurrent
 import com.android.systemui.kosmos.runTest
 import com.android.systemui.plugins.ActivityStarter
@@ -50,6 +51,7 @@ import com.android.systemui.qs.tiles.impl.flashlight.domain.interactor.flashligh
 import com.android.systemui.qs.tiles.impl.flashlight.ui.mapper.flashlightTileMapper
 import com.android.systemui.res.R
 import com.android.systemui.statusbar.policy.PolicyModule
+import com.android.systemui.statusbar.policy.flashlightController
 import com.android.systemui.testKosmos
 import com.google.common.truth.Truth.assertThat
 import org.junit.After
@@ -113,6 +115,7 @@ class FlashlightTileWithLevelTest : SysuiTestCase() {
                 kosmos.flashlightTileDataInteractor,
                 mockUserActionInteractor,
                 kosmos.flashlightTileMapper,
+                DualToneTorch(mContext, kosmos.flashlightController),
             )
 
         underTest.initialize()

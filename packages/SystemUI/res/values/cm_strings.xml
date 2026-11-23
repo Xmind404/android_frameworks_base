@@ -129,4 +129,9 @@
     <string name="screenrecord_skip_time_summary">Remove the 3 second wait</string>
     <string name="screenrecord_hevc_switch_label">HEVC encoding</string>
     <string name="screenrecord_hevc_switch_summary">Use the more efficient HEVC encoder</string>
+
+    <!-- Dual-tone torch: long-press panel of the flashlight tile -->
+    <string name="dual_tone_torch_white">White</string>
+    <string name="dual_tone_torch_warm">Warm</string>
+    <string name="dual_tone_torch_description">Torch brightness, white and warm LED</string>
 </resources>

@@ -16,10 +16,13 @@
 
 package com.android.systemui.qs.tiles.impl.flashlight.domain.interactor
 
+import android.content.applicationContext
 import com.android.systemui.flashlight.domain.interactor.flashlightInteractor
+import com.android.systemui.flashlight.dualtone.DualToneTorch
 import com.android.systemui.flashlight.ui.dialog.mockFlashlightDialogDelegate
 import com.android.systemui.kosmos.Kosmos
 import com.android.systemui.statusbar.policy.flashlightController
+import kotlin.coroutines.EmptyCoroutineContext
 
 var Kosmos.flashlightTileUserActionInteractor: FlashlightTileUserActionInteractor by
     Kosmos.Fixture {
@@ -27,5 +30,9 @@ var Kosmos.flashlightTileUserActionInteractor: FlashlightTileUserActionInteracto
             flashlightController,
             { flashlightInteractor },
             { mockFlashlightDialogDelegate },
+            // config_dualToneTorch is false by default, so the dialog is never requested.
+            DualToneTorch(applicationContext, flashlightController),
+            { error("Dual-tone torch dialog is not available in tests") },
+            EmptyCoroutineContext,
         )
     }

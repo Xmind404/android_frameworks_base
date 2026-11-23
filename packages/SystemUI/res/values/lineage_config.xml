@@ -79,4 +79,9 @@
 
     <!-- Whether to force notifications to take up the full width of the screen in landscape -->
     <bool name="config_fullWidthNotificationsInLandscape">false</bool>
+
+    <!-- Whether the rear torch has a white and a warm LED whose mix is set by the device
+         (vendor.torch.* properties). Long-pressing the flashlight tile then shows a slider for
+         each LED. -->
+    <bool name="config_dualToneTorch">false</bool>
 </resources>

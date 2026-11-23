@@ -18,6 +18,9 @@ package com.android.systemui.qs.tiles.impl.flashlight.domain.interactor
 
 import android.app.ActivityManager
 import com.android.systemui.dagger.SysUISingleton
+import com.android.systemui.dagger.qualifiers.Main
+import com.android.systemui.flashlight.dualtone.DualToneTorch
+import com.android.systemui.flashlight.dualtone.DualToneTorchDialogDelegate
 import com.android.systemui.flashlight.domain.interactor.FlashlightInteractor
 import com.android.systemui.flashlight.flags.FlashlightStrength
 import com.android.systemui.flashlight.shared.model.FlashlightModel
@@ -28,6 +31,8 @@ import com.android.systemui.qs.tiles.base.shared.model.QSTileUserAction
 import com.android.systemui.statusbar.policy.FlashlightController
 import dagger.Lazy
 import javax.inject.Inject
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.withContext
 
 /** Handles flashlight tile clicks. */
 @SysUISingleton
@@ -37,6 +42,9 @@ constructor(
     private val flashlightController: FlashlightController,
     private val flashlightInteractor: Lazy<FlashlightInteractor>,
     private val flashlightDialogDelegate: Lazy<FlashlightDialogDelegate>,
+    private val dualToneTorch: DualToneTorch,
+    private val dualToneTorchDialogDelegate: Lazy<DualToneTorchDialogDelegate>,
+    @Main private val mainCoroutineContext: CoroutineContext,
 ) : QSTileUserActionInteractor<FlashlightModel> {
 
     override suspend fun handleInput(input: QSTileInput<FlashlightModel>): Unit =
@@ -76,7 +84,13 @@ constructor(
                         flashlightInteractor.get().setEnabled(!data.enabled)
                     }
                 }
-                is QSTileUserAction.LongClick -> {}
+                is QSTileUserAction.LongClick -> {
+                    if (dualToneTorch.isSupported && !ActivityManager.isUserAMonkey()) {
+                        withContext(mainCoroutineContext) {
+                            dualToneTorchDialogDelegate.get().showDialog()
+                        }
+                    }
+                }
             }
         }
 }

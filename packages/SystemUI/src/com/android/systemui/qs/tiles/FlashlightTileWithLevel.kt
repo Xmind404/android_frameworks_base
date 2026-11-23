@@ -29,6 +29,7 @@ import com.android.internal.logging.MetricsLogger
 import com.android.systemui.animation.Expandable
 import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.dagger.qualifiers.Main
+import com.android.systemui.flashlight.dualtone.DualToneTorch
 import com.android.systemui.flashlight.flags.FlashlightStrength
 import com.android.systemui.flashlight.shared.model.FlashlightModel
 import com.android.systemui.log.DebugLogger.debugLog
@@ -69,6 +70,7 @@ constructor(
     private val dataInteractor: FlashlightTileDataInteractor,
     private val userActionInteractor: FlashlightTileUserActionInteractor,
     private val tileMapper: FlashlightTileMapper,
+    private val dualToneTorch: DualToneTorch,
 ) :
     QSTileImpl<BooleanState>(
         host,
@@ -97,7 +99,8 @@ constructor(
 
     override fun newTileState(): BooleanState {
         val state = BooleanState()
-        state.handlesLongClick = false
+        // Long-press opens the white/warm LED mix on dual-tone torch devices.
+        state.handlesLongClick = dualToneTorch.isSupported
         return state
     }
 
