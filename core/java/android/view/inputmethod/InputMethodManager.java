@@ -4511,16 +4511,6 @@ public final class InputMethodManager {
                 reason);
     }
 
-    /**
-     * Dispatches an input event to the IME.
-     *
-     * Returns {@link #DISPATCH_HANDLED} if the event was handled.
-     * Returns {@link #DISPATCH_NOT_HANDLED} if the event was not handled.
-     * Returns {@link #DISPATCH_IN_PROGRESS} if the event is in progress and the
-     * callback will be invoked later.
-     *
-     * @hide
-     */
     private static boolean isImeSwitcherShortcut(KeyEvent event, int mode) {
         final int keyCode = event.getKeyCode();
         switch (mode) {
@@ -4537,6 +4527,16 @@ public final class InputMethodManager {
         }
     }
 
+    /**
+     * Dispatches an input event to the IME.
+     *
+     * Returns {@link #DISPATCH_HANDLED} if the event was handled.
+     * Returns {@link #DISPATCH_NOT_HANDLED} if the event was not handled.
+     * Returns {@link #DISPATCH_IN_PROGRESS} if the event is in progress and the
+     * callback will be invoked later.
+     *
+     * @hide
+     */
     public int dispatchInputEvent(InputEvent event, Object token,
             FinishedInputEventCallback callback, Handler handler) {
         synchronized (mH) {
