@@ -2500,11 +2500,6 @@ public final class PowerManagerService extends SystemService
         userActivityInternal(displayId, eventTime, event, flags, Process.SYSTEM_UID);
     }
 
-    /**
-     * Notifies user activity without checking permissions.
-     *
-     * This should <b>not</b> be called with {@link #mLock} held.
-     */
     // Called from native input dispatch for SOURCE_TOUCHPAD motion (the keyboard touch
     // surface), throttled in JNI.
     @SuppressWarnings("unused")
@@ -2541,6 +2536,11 @@ public final class PowerManagerService extends SystemService
         }
     }
 
+    /**
+     * Notifies user activity without checking permissions.
+     *
+     * This should <b>not</b> be called with {@link #mLock} held.
+     */
     private void userActivityInternal(int displayId, long eventTime,
             @PowerManager.UserActivityEvent int event, int flags, int uid) {
         synchronized (mLock) {
